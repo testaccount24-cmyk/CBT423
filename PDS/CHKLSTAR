@@ -1,0 +1,225 @@
+CHKLSTAR TITLE '- UTILITY TO DETERMINE EMPTINESS OF DATASETS BASED ON H+
+               IGH WATER MARK.'
+*%A AMODGEN RENT LOAD(SYS1.PPLIB)
+         SPACE 1
+***********************************************************************
+*                                                                     *
+*    CHKLSTAR - UTILITY TO DETERMINE THE EMPTINESS OF NON-VSAM        *
+*        DATASETS BASED ON THE HIGH WATER MARK (DS1LSTAR FIELD)       *
+*        IN THE FORMAT 1 DSCB.                                        *
+*                                                                     *
+*    INPUT: ONE OR MORE DISK FILES POINTED TO BY DDNAMES              *
+*        BEGINNING WITH THE CHARACTER STRING "SYSUT".  NO FILES       *
+*        WILL BE OPENED.                                              *
+*                                                                     *
+*    OUTPUT: THE ONLY OUTPUT IS VIA CONDITION CODE AS FOLLOWS:        *
+*                                                                     *
+*             0 - ALL DATASETS POINTED TO BY "SYSUT" DDNAMES          *
+*                 CONTAIN DATA.                                       *
+*                                                                     *
+*             4 - AT LEAST ONE FILE IS EMPTY, DUMMY OR DSN=NULLFILE.  *
+*                                                                     *
+*             8 - AT LEAST ONE DATASET CANNOT BE FOUND ON VOLUME.     *
+*                                                                     *
+*            12 - NO ALLOCATION WITH A DDNAME BEGINNING WITH          *
+*                 "SYSUT" CAN BE FOUND.                               *
+*                                                                     *
+*            16 - CANNOT DETERMINE VOLUME, DATASET NAME, DATASET      *
+*                 NOT ON DISK OR FAILURE OF OBTAIN SERVICE FOR        *
+*                 AT LEAST ONE DATASET.  CC 16 RETURNED ALSO IF       *
+*                 ANY FILE IS A TCAM QUEUE, TSO TERMINAL, SYSOUT,     *
+*                 SYSIN OR OTHER JESX FILE.                           *
+*                                                                     *
+*                                                                     *
+*       JCL EXAMPLE:                                                  *
+*                                                                     *
+*                //WATERMK EXEC PGM=CHKLSTAR                          *
+*                //SYSUT1   DD  DSN=MIS.FRABBLE.BIBBLE,DISP=SHR       *
+*                //SYSUT2   DD  DSN=&&FRUMP,DISP=(OLD,PASS)           *
+*                //SYSUT3   DD  DSN=MORGLE.DRELB,DISP=OLD,            *
+*                //             UNIT=SYSDA,VOL=SER=PLOP01             *
+*                //SYSUTFOO DD  DSN=BLEEP.BLOOP,DISP=SHR              *
+*                                                                     *
+*                                                                     *
+*       THE FIRST OCCURANCE OF AN EMPTY DATASET OR PROBLEM            *
+*       FORCING NON-ZERO CONDITION CODE TERMINATES PROGRAM.  IN       *
+*       OTHER WORDS, ALL FILES MAY NOT BE CHECKED UNDER CERTAIN       *
+*       CIRCUMSTANCES.                                                *
+*                                                                     *
+*       REENTRANT, NON-AUTHORIZED.                                    *
+*                                                                     *
+*       ASM SYSLIB: SYS1.MACLIB, SYS1.AMODGEN, SYS.MACLIB             *
+*       LKED   SYSLIB: NONE.                                          *
+*                                                                     *
+*                                  JEFFREY R. BROIDO                  *
+*                                  EDS@WUTC-MAHWAH,NJ                 *
+*                                  5    JUNE    1986                  *
+*                                                                     *
+*                                  BROIDO COMPUTER CONSULTING         *
+*                                  104 MILLS STREET                   *
+*                                  MORRISTOWN, N.J.  07960-3722       *
+*                                                                     *
+***********************************************************************
+         SPACE 1
+CHKLSTAR CSECT
+         REGS                      REGISTER EQUATES.
+         USING CHKLSTAR,R15        (ESTABLISH TEMPORARY BASE).
+         B     BEGIN               BRANCH AROUND HEADER.
+HEAD0    DC    AL1(HEADL),C'CHKLSTAR V0M0 - &SYSDATE - '
+         DC    C'COPYRIGHT (C) 1986 EDS, INC - ALL RIGHTS RESERVED'
+HEADL    EQU   *-HEAD0
+BEGIN    STM   R14,R12,12(R13)     SAVE CALLER'S REGISTERS.
+         LR    R12,R15             COPY BASE.
+         DROP  R15                 (DROP TEMPORARY BASE).
+         USING CHKLSTAR,R12        (TELL ASSEMBLER).
+         LR    R3,R13              COPY CALLER'S SAVE AREA POINTER.
+         GETMAIN RU,LV=DYNL        GET STORAGE FOR DYNAMIC AREA.
+         LR    R13,R1              POINT TO DYNAMIC AREA.
+         USING DYN,R13             (TELL ASSEMBLER).
+         ST    R13,8(,R3)          CHAIN ...
+         ST    R3,4(,R13)          ... SAVE AREAS.
+         MVI   FLAG,X'00'          INITIALIZE FLAGS.
+         SPACE 1
+***********************************************************************
+*                                                                     *
+*        INITIALIZATION OF DYNAMIC AREA.  UNFORTUNATELY, CAMLST       *
+*        DOESN'T LEND ITSELF TO REENTRANT PROGRAMS, SO THE PARM       *
+*        LIST IS FILLED-IN BY DISPLACEMENT.                           *
+*                                                                     *
+***********************************************************************
+         SPACE 1
+         MVC   OBTLST(OBTLSTL),OBTLSTM COPY OBTAIN PARM MODEL.
+         LA    R0,DSNAME           MOVE DSNAME POINTER ...
+         ST    R0,OBTLST+4         ... TO OBTAIN PARM LIST.
+         LA    R0,VOLUME           MOVE VOLUME POINTER ...
+         ST    R0,OBTLST+8         ... TO OBTAIN PARM LIST.
+         LA    R0,OBTWORK          MOVE DSCB BUFFER ...
+         ST    R0,OBTLST+12        ... TO OBTAIN PARM LIST.
+         L     R10,X'10'           POINT TO CVT.
+         L     R10,0(,R10)         POINT TO TCB/ASCB POINTERS.
+         L     R10,0(,R10)         POINT TO MY TCB.
+         USING TCB,R10             (TELL ASSEMBLER).
+         L     R9,TCBTIO           POINT TO TIOT.
+         USING TIOT1,R9            (TELL ASSEMBLER).
+         LA    R9,TIOENTRY         POINT TO FIRST DDNAME ENTRY
+         USING TIOENTRY,R9         (TELL ASSEMBLER).
+         SR    R8,R8               CLEAR TIOT ENTRY LENGTH REGISTER.
+         SPACE 1
+***********************************************************************
+*                                                                     *
+*        LOOP THROUGH TIOT, LOOKING FOR "SYSUT" DDNAMES.              *
+*                                                                     *
+***********************************************************************
+         SPACE 1
+TIOTLOOP LA    R9,TIOENTRY(R8)     BUMP TO NEXT TIOT DD ENTRY.
+         ICM   R8,B'0001',TIOELNGH LOAD LENGTH OF DD ENTRY.
+         BZ    CKDD                B IF 0.  END OF TIOT.
+         CLC   =C'SYSUT',TIOEDDNM  DOES DDNAME START WITH "SYSUT"?
+         BNE   TIOTLOOP            B IF NOT.  CHECK NEXT DD ENTRY.
+         ON    DDFG                TURN ON "SYSUT"-FOUND FLAG.
+         TM    TIOELINK,TIOSYOUT+TIOTTERM+TIOEDYNM+TIOEQNAM+TIOESYIN+TI+
+               OESYOT+TIOESSDS+TIOTREM ANY FORBIDDEN DATASET TYPE?
+         BNZ   EOJ16               B IF YES.  ERROR.
+         SPACE 1
+***********************************************************************
+*                                                                     *
+*        CHECK JFCB FOR PROPER DATSET NAME.                           *
+*                                                                     *
+***********************************************************************
+         SPACE 1
+         SR    R7,R7               CLEAR JFCB POINTER REGISTER.
+         ICM   R7,B'0111',TIOEJFCB POINT TO JFCB HEADER.
+         USING INFMJFCB-X'10',R7   (TELL ASSEMBLER)
+         BZ    EOJ16               B IF NO JFCB.
+         CLC   =C'JFCB',JFCBDSNM-4 TRULY A JFCB?
+         BNE   EOJ16               B IF NOT.  ERROR.
+         CLC   =C'NULLFILE ',JFCBDSNM DUMMY FILE?
+         BE    EOJ4                B IF YES.  TREAT DUMMY AS EMPTY.
+         CLI   JFCBDSNM,C' '       ANY DATASET NAME?
+         BE    EOJ16               B IF NOT.  ERROR.
+         MVC   DSNAME,JFCBDSNM     MOVE DATASET NAME.
+         SPACE 1
+***********************************************************************
+*                                                                     *
+*        CHECK UCB FOR PROPER DEVICE CLASS AND VOLUME SERIAL.         *
+*                                                                     *
+***********************************************************************
+         SPACE 1
+         SR    R7,R7               LOAD FIRST DEVICE'S ...
+         ICM   R7,B'0111',TIOEFSRT ... UCB ADDRESS.
+         USING UCBOB,R7            (TELL ASSEMBLER).
+         BZ    EOJ16               B IF NO UCB.  ERROR.
+         TM    UCBTBYT3,UCB3DACC   DIRECT ACCESS DEVICE?
+         BZ    EOJ16               B IF NOT.  ERROR.
+         CLC   UCBVOLI,=XL6'00'    ANY VOLUME SERIAL?
+         BE    EOJ16               B IF NOT.  ERROR.
+         MVC   VOLUME,UCBVOLI      MOVE VOLUME SERIAL.
+         SPACE 1
+***********************************************************************
+*                                                                     *
+*        READ DATASET'S FORMAT 1 DSCB.                                *
+*                                                                     *
+***********************************************************************
+         SPACE 1
+         OBTAIN OBTLST             READ FORMAT 1 DSCB.
+         LTR   R15,R15             FOUND FORMAT 1 DSCB?
+         BZ    CKLSTAR             B IF YES.
+         CH    R15,=H'8'           DATASET ON VOLUME?
+         BNE   EOJ16               B IF OTHER PROBLEM.
+         LA    R3,8                SET CC OF 8 (DSN NOT ON VOL).
+         B     EOJ                 EXIT.
+         SPACE 1
+***********************************************************************
+*                                                                     *
+*        FINALLY, NOW THAT WE PASSED OUR EXAMS, CHECK THE             *
+*        HIGH WATER MARK.                                             *
+*                                                                     *
+***********************************************************************
+         SPACE 1
+CKLSTAR  LA    R7,OBTWORK          POINT TO FORMAT 1 DSCB.
+         USING DS1FMTID,R7         (TELL ASSEMBLER).
+         CLC   DS1LSTAR,=XL6'00'   IS HIGH WATER MARK ZERO?
+         BNE   TIOTLOOP            B IF NOT.  NON-EMPTY FILE.
+EOJ4     LA    R3,4                SET CC 4.
+         B     EOJ                 EXIT.
+CKDD     TF    DDFG                ANY "SYSUT" DDNAMES FOUND?
+         BO    EOJ0                B IF YES.
+         LA    R3,12               SET CC OF 12.
+         B     EOJ                 EXIT.
+EOJ16    LA    R3,16               SET CC 16.
+         B     EOJ                 EXIT.
+EOJ0     SR    R3,R3               SET CC 0.
+EOJ      LR    R2,R13              COPY DYNAMIC AREA POINTER.
+         L     R13,SAVE+4          POINT TO CALLER'S SAVE AREA.
+         DROP  R13
+         FREEMAIN RU,A=(R2),LV=DYNL FREE DYNAMIC AREA.
+         LR    R15,R3              COPY CONDITION CODE.
+         LM    R0,R12,20(R13)      RELOAD CALLER'S REGISTERS.
+         L     R14,12(,R13)        RELOAD RETURN ADDRESS.
+         BR    R14                 RETURN TO CALLER.
+         TITLE '- STATIC DATA AREA.'
+         LTORG
+OBTLSTM  CAMLST SEARCH,*,*,*
+OBTLSTL  EQU   *-OBTLSTM
+         TITLE '- DYNAMIC DATA AREA.'
+DYN      DSECT                     START OF DYNAMIC DATA AREA.
+SAVE     DS    9D                  REGISTER SAVE AREA.
+OBTLST   CAMLST SEARCH,*,*,*
+DSNAME   DS    CL44                DATASET NAME FOR OBTAIN.
+VOLUME   DS    CL6                 VOLUME SERIAL FOR OBTAIN.
+OBTWORK  DS    XL140               DSCB1 BUFFER FOR OBTAIN.
+         SPACE 1
+FLAG     DC    X'00'               VARIOUS FLAGS.
+DDFG     EQU   FLAG,B'10000000'    "SYSUT"-DDNAME-FOUND FLAG.
+         SPACE 1
+DYNL     EQU   *-DYN
+         TITLE '- MAPPING DSECTS.'
+         IKJTCB LIST=YES           MAP TASK CONTROL BLOCK.
+TIOT     DSECT
+         IEFTIOT1                  MAP TASK INPUT/OUTPUT TABLE.
+JFCB     DSECT
+         IEFJFCBN LIST=YES         MAP JOB FILE CONTROL BLOCK.
+         IEFUCBOB LIST=YES,PREFIX=YES  MAP UCB.
+DSCB1    DSECT
+         IECSDSL1 (1)              MAP FORMAT 1 DSCB.
+         END   CHKLSTAR
